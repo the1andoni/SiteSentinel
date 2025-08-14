@@ -55,77 +55,172 @@ class CustomCommands(discord.ext.commands.Cog):
 
     @app_commands.command(name="status", description="Zeigt den Status aller überwachten Websites als Embed")
     async def status(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
         status = self.monitor.get_status()
+        if not status:
+            embed = discord.Embed(
+                title="Status der Websites", 
+                description="Keine Websites werden überwacht.",
+                color=discord.Color.gray()
+            )
+            await interaction.followup.send(embed=embed)
+            return
+            
         embed = discord.Embed(title="Status der Websites", color=discord.Color.purple())
-        for url, up in status.items():
-            emoji = "✅" if up else "❌"
-            embed.add_field(name=url, value=emoji, inline=False)
-        await interaction.response.send_message(embed=embed)
-
-    @app_commands.command(name="ping", description="Zeigt Bot- und Server-Informationen")
-    async def ping(self, interaction: discord.Interaction):
-        # websocket latency
-        latency_ms = round(self.bot.latency * 1000)
-
-        # TCP ping to 8.8.8.8:53 to estimate network latency
-        tcp_latency_ms = None
-        try:
-            import socket, time
-            start = time.perf_counter()
-            sock = socket.create_connection(("8.8.8.8", 53), timeout=3)
-            sock.close()
-            end = time.perf_counter()
-            tcp_latency_ms = round((end - start) * 1000)
-        except Exception:
-            tcp_latency_ms = None
-
-        # Public IP and geolocation (optional)
-        public_ip = None
-        location = None
-        try:
-            import requests
-            r = requests.get("https://ipinfo.io/json", timeout=3)
-            if r.status_code == 200:
-                info = r.json()
-                public_ip = info.get("ip")
-                loc = info.get("city")
-                region = info.get("region")
-                country = info.get("country")
-                if loc or region or country:
-                    location = ", ".join([x for x in [loc, region, country] if x])
-        except Exception:
-            pass
-
-        # Hostname and local IP
-        hostname = None
-        local_ip = None
-        try:
-            import socket
-            hostname = socket.gethostname()
-            # try to get primary local IP
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        
+        # Favicon-Helper Funktion
+        async def get_favicon_url(url):
             try:
-                s.connect(("8.8.8.8", 80))
-                local_ip = s.getsockname()[0]
-            except Exception:
-                local_ip = socket.gethostbyname(hostname)
-            finally:
-                s.close()
-        except Exception:
-            pass
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                return f"https://www.google.com/s2/favicons?domain={parsed.netloc}&sz=16"
+            except:
+                return None
+        
+        for url, up in status.items():
+            emoji = "🟢" if up else "🔴"
+            status_text = "Online" if up else "Offline"
+            
+            # Statistiken hinzufügen falls verfügbar
+            stats_text = status_text
+            if url in self.monitor.stats:
+                stats = self.monitor.stats[url]
+                uptime_total = stats["up"] + stats["down"]
+                if uptime_total > 0:
+                    uptime_percent = round((stats["up"] / uptime_total) * 100, 1)
+                    stats_text += f" ({uptime_percent}% Uptime)"
+                    
+                    # Durchschnittliche Response-Zeit
+                    if stats["response_times"]:
+                        avg_response = round(sum(stats["response_times"]) / len(stats["response_times"]) * 1000)
+                        stats_text += f"\n⚡ {avg_response}ms avg"
+            
+            embed.add_field(name=f"{emoji} {url}", value=stats_text, inline=False)
+        
+        embed.set_footer(text="Site Sentinel", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+        embed.timestamp = discord.utils.utcnow()
+        
+        await interaction.followup.send(embed=embed)
 
-        embed = discord.Embed(title="Pong 🏓", color=discord.Color.green())
-        embed.add_field(name="Bot Latency (WS)", value=f"{latency_ms} ms", inline=True)
-        if tcp_latency_ms is not None:
-            embed.add_field(name="TCP Ping (8.8.8.8:53)", value=f"{tcp_latency_ms} ms", inline=True)
-        if public_ip:
-            embed.add_field(name="Public IP", value=public_ip, inline=True)
-        if location:
-            embed.add_field(name="Standort (approx)", value=location, inline=True)
-        if hostname:
-            embed.add_field(name="Hostname", value=hostname, inline=True)
-        if local_ip:
-            embed.add_field(name="Lokale IP", value=local_ip, inline=True)
+    @app_commands.command(name="ping", description="Testet eine URL und zeigt Response-Informationen")
+    @app_commands.describe(url="URL der Website die getestet werden soll")
+    async def ping(self, interaction: discord.Interaction, url: str):
+        await interaction.response.defer()
+        
+        import aiohttp
+        import time
+        from urllib.parse import urlparse
+        
+        # URL validieren und formatieren
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+        
+        # Favicon URL generieren
+        try:
+            parsed = urlparse(url)
+            favicon_url = f"https://www.google.com/s2/favicons?domain={parsed.netloc}&sz=32"
+        except:
+            favicon_url = None
+        
+        try:
+            start_time = time.perf_counter()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=10) as response:
+                    end_time = time.perf_counter()
+                    response_time_ms = round((end_time - start_time) * 1000)
+                    
+                    # Response-Daten sammeln
+                    status_code = response.status
+                    content_type = response.headers.get('Content-Type', 'N/A')
+                    content_length = response.headers.get('Content-Length', 'N/A')
+                    server = response.headers.get('Server', 'N/A')
+                    last_modified = response.headers.get('Last-Modified', 'N/A')
+                    
+                    # Status-Farbe bestimmen
+                    if 200 <= status_code < 300:
+                        color = discord.Color.green()
+                        status_emoji = "🟢"
+                    elif 300 <= status_code < 400:
+                        color = discord.Color.yellow()
+                        status_emoji = "�"
+                    elif 400 <= status_code < 500:
+                        color = discord.Color.orange()
+                        status_emoji = "🟠"
+                    else:
+                        color = discord.Color.red()
+                        status_emoji = "🔴"
+                    
+                    embed = discord.Embed(
+                        title=f"Ping Ergebnis",
+                        description=f"**{url}**", 
+                        color=color,
+                        timestamp=discord.utils.utcnow()
+                    )
+                    
+                    embed.add_field(name="Status", value=f"{status_emoji} {status_code}", inline=True)
+                    embed.add_field(name="Response Time", value=f"⚡ {response_time_ms} ms", inline=True)
+                    embed.add_field(name="Content-Type", value=content_type[:50], inline=True)
+                    
+                    if content_length != 'N/A':
+                        # Formatierte Größe
+                        try:
+                            size_bytes = int(content_length)
+                            if size_bytes < 1024:
+                                size_str = f"{size_bytes} B"
+                            elif size_bytes < 1024*1024:
+                                size_str = f"{size_bytes/1024:.1f} KB"
+                            else:
+                                size_str = f"{size_bytes/(1024*1024):.1f} MB"
+                            embed.add_field(name="Content-Length", value=size_str, inline=True)
+                        except:
+                            embed.add_field(name="Content-Length", value=content_length, inline=True)
+                    
+                    if server != 'N/A':
+                        embed.add_field(name="Server", value=server[:50], inline=True)
+                    
+                    if last_modified != 'N/A':
+                        embed.add_field(name="Last-Modified", value=last_modified[:50], inline=True)
+                    
+                    if favicon_url:
+                        embed.set_thumbnail(url=favicon_url)
+                    
+                    embed.set_footer(text="Site Sentinel", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+                    
+        except aiohttp.ClientTimeout:
+            embed = discord.Embed(
+                title=f"Ping Ergebnis",
+                description=f"**{url}**", 
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.add_field(name="Fehler", value="🔴 Timeout (>10s)", inline=False)
+            if favicon_url:
+                embed.set_thumbnail(url=favicon_url)
+            embed.set_footer(text="Site Sentinel")
+            
+        except aiohttp.ClientError as e:
+            embed = discord.Embed(
+                title=f"Ping Ergebnis",
+                description=f"**{url}**", 
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.add_field(name="Fehler", value=f"🔴 Client Error: {str(e)}", inline=False)
+            if favicon_url:
+                embed.set_thumbnail(url=favicon_url)
+            embed.set_footer(text="Site Sentinel")
+            
+        except Exception as e:
+            embed = discord.Embed(
+                title=f"Ping Ergebnis",
+                description=f"**{url}**", 
+                color=discord.Color.red(),
+                timestamp=discord.utils.utcnow()
+            )
+            embed.add_field(name="Fehler", value=f"🔴 {str(e)}", inline=False)
+            if favicon_url:
+                embed.set_thumbnail(url=favicon_url)
+            embed.set_footer(text="Site Sentinel")
 
-
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
