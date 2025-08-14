@@ -60,27 +60,47 @@ class CustomCommands(discord.ext.commands.Cog):
         status = self.monitor.get_status()
         if not status:
             embed = discord.Embed(
-                title="Status der Websites", 
-                description="Keine Websites werden überwacht.",
-                color=discord.Color.gray()
+                title="📊 Status der Websites", 
+                description="❌ **Keine Websites werden überwacht**\n\n" +
+                           "Verwende `/add [url]` um eine Website zur Überwachung hinzuzufügen.",
+                color=discord.Color.orange()
             )
+            embed.add_field(
+                name="💡 Hilfe", 
+                value="• `/add https://example.com` - Website hinzufügen\n" +
+                      "• `/setchannel` - Benachrichtigungs-Channel setzen\n" +
+                      "• `/setlogchannel` - Log-Channel setzen", 
+                inline=False
+            )
+            embed.set_footer(text="Site Sentinel", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
+            embed.timestamp = discord.utils.utcnow()
             await interaction.followup.send(embed=embed)
             return
             
-        embed = discord.Embed(title="Status der Websites", color=discord.Color.purple())
+        embed = discord.Embed(
+            title="📊 Status der Websites", 
+            description=f"Überwachung von **{len(status)}** Website(s)",
+            color=discord.Color.purple()
+        )
         
-        # Favicon-Helper Funktion
-        async def get_favicon_url(url):
-            try:
-                from urllib.parse import urlparse
-                parsed = urlparse(url)
-                return f"https://www.google.com/s2/favicons?domain={parsed.netloc}&sz=16"
-            except:
-                return None
+        # Statistiken sammeln
+        online_count = 0
+        offline_count = 0
+        unknown_count = 0
         
         for url, up in status.items():
-            emoji = "🟢" if up else "🔴"
-            status_text = "Online" if up else "Offline"
+            if up is None:
+                emoji = "⚪"
+                status_text = "Unbekannt"
+                unknown_count += 1
+            elif up:
+                emoji = "🟢"
+                status_text = "Online"
+                online_count += 1
+            else:
+                emoji = "🔴"
+                status_text = "Offline"
+                offline_count += 1
             
             # Statistiken hinzufügen falls verfügbar
             stats_text = status_text
@@ -98,18 +118,33 @@ class CustomCommands(discord.ext.commands.Cog):
             
             embed.add_field(name=f"{emoji} {url}", value=stats_text, inline=False)
         
+        # Zusammenfassung hinzufügen
+        summary_text = ""
+        if online_count > 0:
+            summary_text += f"🟢 **{online_count}** Online"
+        if offline_count > 0:
+            if summary_text: summary_text += " • "
+            summary_text += f"🔴 **{offline_count}** Offline"
+        if unknown_count > 0:
+            if summary_text: summary_text += " • "
+            summary_text += f"⚪ **{unknown_count}** Unbekannt"
+        
+        if summary_text:
+            embed.add_field(name="📈 Zusammenfassung", value=summary_text, inline=False)
+        
         embed.set_footer(text="Site Sentinel", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
         embed.timestamp = discord.utils.utcnow()
         
         await interaction.followup.send(embed=embed)
 
-    @app_commands.command(name="ping", description="Testet eine URL und zeigt Response-Informationen")
-    @app_commands.describe(url="URL der Website die getestet werden soll")
+    @app_commands.command(name="ping", description="Testet eine Website oder IP und zeigt Response-Informationen")
+    @app_commands.describe(url="URL der Website oder IP-Adresse die getestet werden soll")
     async def ping(self, interaction: discord.Interaction, url: str):
         await interaction.response.defer()
         
         import aiohttp
         import time
+        import asyncio
         from urllib.parse import urlparse
         
         # URL validieren und formatieren
@@ -123,10 +158,12 @@ class CustomCommands(discord.ext.commands.Cog):
         except:
             favicon_url = None
         
+        embed = None
+        
         try:
             start_time = time.perf_counter()
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=10) as response:
+                async with asyncio.wait_for(session.get(url), timeout=10) as response:
                     end_time = time.perf_counter()
                     response_time_ms = round((end_time - start_time) * 1000)
                     
@@ -143,7 +180,7 @@ class CustomCommands(discord.ext.commands.Cog):
                         status_emoji = "🟢"
                     elif 300 <= status_code < 400:
                         color = discord.Color.yellow()
-                        status_emoji = "�"
+                        status_emoji = "🟡"
                     elif 400 <= status_code < 500:
                         color = discord.Color.orange()
                         status_emoji = "🟠"
@@ -152,7 +189,7 @@ class CustomCommands(discord.ext.commands.Cog):
                         status_emoji = "🔴"
                     
                     embed = discord.Embed(
-                        title=f"Ping Ergebnis",
+                        title="Website Test",
                         description=f"**{url}**", 
                         color=color,
                         timestamp=discord.utils.utcnow()
@@ -187,9 +224,9 @@ class CustomCommands(discord.ext.commands.Cog):
                     
                     embed.set_footer(text="Site Sentinel", icon_url=self.bot.user.avatar.url if self.bot.user.avatar else None)
                     
-        except aiohttp.ClientTimeout:
+        except asyncio.TimeoutError:
             embed = discord.Embed(
-                title=f"Ping Ergebnis",
+                title="Website Test",
                 description=f"**{url}**", 
                 color=discord.Color.red(),
                 timestamp=discord.utils.utcnow()
@@ -199,21 +236,9 @@ class CustomCommands(discord.ext.commands.Cog):
                 embed.set_thumbnail(url=favicon_url)
             embed.set_footer(text="Site Sentinel")
             
-        except aiohttp.ClientError as e:
-            embed = discord.Embed(
-                title=f"Ping Ergebnis",
-                description=f"**{url}**", 
-                color=discord.Color.red(),
-                timestamp=discord.utils.utcnow()
-            )
-            embed.add_field(name="Fehler", value=f"🔴 Client Error: {str(e)}", inline=False)
-            if favicon_url:
-                embed.set_thumbnail(url=favicon_url)
-            embed.set_footer(text="Site Sentinel")
-            
         except Exception as e:
             embed = discord.Embed(
-                title=f"Ping Ergebnis",
+                title="Website Test",
                 description=f"**{url}**", 
                 color=discord.Color.red(),
                 timestamp=discord.utils.utcnow()
@@ -223,4 +248,51 @@ class CustomCommands(discord.ext.commands.Cog):
                 embed.set_thumbnail(url=favicon_url)
             embed.set_footer(text="Site Sentinel")
 
+        await interaction.followup.send(embed=embed)
+
+    @app_commands.command(name="debug", description="Zeigt Debug-Informationen für das Monitoring")
+    async def debug(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        
+        import os
+        
+        status = self.monitor.get_status()
+        embed = discord.Embed(title="🔍 Debug Informationen", color=discord.Color.blue())
+        
+        if not status:
+            embed.add_field(name="❌ Problem", value="Keine Websites in der Überwachung", inline=False)
+        else:
+            embed.add_field(name="📊 Überwachte Sites", value=f"{len(status)} Website(s)", inline=True)
+            
+            for url, current_status in status.items():
+                status_text = "None (Unbekannt)" if current_status is None else ("Online" if current_status else "Offline")
+                
+                debug_info = f"**Status:** {status_text}\n"
+                
+                if url in self.monitor.stats:
+                    stats = self.monitor.stats[url]
+                    debug_info += f"**Up:** {stats['up']} | **Down:** {stats['down']}\n"
+                    if stats['response_times']:
+                        avg_time = sum(stats['response_times']) / len(stats['response_times'])
+                        debug_info += f"**Avg Response:** {avg_time*1000:.0f}ms\n"
+                else:
+                    debug_info += "**Stats:** Keine Daten\n"
+                
+                embed.add_field(name=f"🌐 {url[:50]}", value=debug_info, inline=False)
+        
+        # Check-Interval Info
+        embed.add_field(name="⏱️ Check Interval", value="60 Sekunden", inline=True)
+        
+        # Letzte Logs (falls verfügbar)
+        try:
+            log_file = "/home/the1andoni/Documents/Documents/Programmierung/Python/Bots/SiteSentinel/Logs/Bot.log"
+            if os.path.exists(log_file):
+                with open(log_file, 'r') as f:
+                    lines = f.readlines()[-10:]  # Letzte 10 Zeilen
+                recent_logs = "```\n" + "".join(lines[-5:]) + "```"  # Nur 5 für Discord
+                embed.add_field(name="📝 Letzte Logs", value=recent_logs[:1024], inline=False)
+        except Exception as e:
+            embed.add_field(name="📝 Log Fehler", value=str(e), inline=False)
+        
+        embed.timestamp = discord.utils.utcnow()
         await interaction.followup.send(embed=embed)
