@@ -9,14 +9,6 @@ class CustomCommands(discord.ext.commands.Cog):
         self.db = db
         self.monitor = monitor
 
-    async def cog_load(self):
-        # Registriere App-Commands beim Bot CommandTree
-        self.bot.tree.add_command(self.setlogchannel)
-        self.bot.tree.add_command(self.setchannel)
-        self.bot.tree.add_command(self.add)
-        self.bot.tree.add_command(self.remove)
-        self.bot.tree.add_command(self.status)
-
     @app_commands.command(name="setlogchannel", description="Setzt den Channel für Log-Meldungen")
     @app_commands.describe(channel="Text-Channel für Log-Meldungen")
     async def setlogchannel(self, interaction: discord.Interaction, channel: discord.TextChannel):
