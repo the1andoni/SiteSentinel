@@ -58,4 +58,5 @@ class Database:
         cursor = self.conn.cursor()
         cursor.execute("SELECT url FROM websites")
         rows = cursor.fetchall()
-        return {row[0]: True for row in rows}
+        # Returniere nur die URLs, nicht den Status (wird im SiteMonitor auf None gesetzt)
+        return [row[0] for row in rows]
