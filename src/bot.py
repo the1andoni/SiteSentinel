@@ -79,6 +79,7 @@ async def on_ready():
 async def check_websites():
     async with aiohttp.ClientSession() as session:
         for url in list(monitor.sites.keys()):
+            previous_status = monitor.sites.get(url, None)  # Vorheriger Status
             try:
                 async with session.get(url, timeout=10) as resp:
                     response_time = None
@@ -86,35 +87,115 @@ async def check_websites():
                         response_time = resp.elapsed.total_seconds()
                     except Exception:
                         response_time = None
-                    if resp.status == 200:
+                    
+                    # 2xx und 3xx Status-Codes als "online" betrachten
+                    if 200 <= resp.status < 400:
                         monitor.stats.setdefault(url, {"up": 0, "down": 0, "response_times": []})
                         monitor.stats[url]["up"] += 1
                         if response_time:
                             monitor.stats[url]["response_times"].append(response_time)
                         monitor.sites[url] = True
+                        
+                        # Nur benachrichtigen wenn vorher offline war
+                        if previous_status is False:
+                            await notify_recovery(url)
+                            write_log(f"Seite wieder online: {url}", db=db)
                     else:
                         monitor.stats.setdefault(url, {"up": 0, "down": 0, "response_times": []})
                         monitor.stats[url]["down"] += 1
                         monitor.sites[url] = False
-                        await notify_downtime(url)
-                        monitor.log_downtime(url, discord.utils.utcnow())
-                        write_log(f"Seite offline: {url}", db=db)
+                        
+                        # Nur benachrichtigen wenn vorher online war
+                        if previous_status is not False:
+                            await notify_downtime(url, f"HTTP {resp.status}")
+                            monitor.log_downtime(url, discord.utils.utcnow())
+                            write_log(f"Seite offline: {url} (HTTP {resp.status})", db=db)
             except Exception as e:
                 monitor.stats.setdefault(url, {"up": 0, "down": 0, "response_times": []})
                 monitor.stats[url]["down"] += 1
                 monitor.sites[url] = False
-                await notify_downtime(url)
-                monitor.log_downtime(url, discord.utils.utcnow())
-                write_log(f"Fehler beim Check von {url}: {e}", db=db)
+                
+                # Nur benachrichtigen wenn vorher online war
+                if previous_status is not False:
+                    await notify_downtime(url, str(e))
+                    monitor.log_downtime(url, discord.utils.utcnow())
+                    write_log(f"Fehler beim Check von {url}: {e}", db=db)
 
 
-async def notify_downtime(url):
+async def get_favicon_url(url):
+    """Versucht die Favicon-URL einer Website zu finden"""
+    try:
+        from urllib.parse import urlparse, urljoin
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        
+        # Standard Favicon-Locations
+        favicon_paths = [
+            "/favicon.ico",
+            "/favicon.png",
+            "/apple-touch-icon.png"
+        ]
+        
+        async with aiohttp.ClientSession() as session:
+            for path in favicon_paths:
+                favicon_url = urljoin(base_url, path)
+                try:
+                    async with session.head(favicon_url, timeout=5) as resp:
+                        if resp.status == 200:
+                            return favicon_url
+                except:
+                    continue
+        
+        # Fallback: Google Favicon Service
+        return f"https://www.google.com/s2/favicons?domain={parsed.netloc}&sz=32"
+    except:
+        return None
+
+async def notify_downtime(url, reason=""):
     channel_id = db.get_channel_id()
     if not channel_id:
         return
     channel = bot.get_channel(channel_id)
     if channel:
-        embed = discord.Embed(title="Seite offline", description=f"{url}", color=discord.Color.red())
+        favicon_url = await get_favicon_url(url)
+        
+        embed = discord.Embed(
+            title="🔴 Website Offline", 
+            description=f"**{url}** ist nicht erreichbar",
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow()
+        )
+        
+        if reason:
+            embed.add_field(name="Grund", value=reason, inline=False)
+        
+        if favicon_url:
+            embed.set_thumbnail(url=favicon_url)
+        
+        embed.set_footer(text="Site Sentinel", icon_url=bot.user.avatar.url if bot.user.avatar else None)
+        
+        await channel.send(embed=embed)
+
+async def notify_recovery(url):
+    channel_id = db.get_channel_id()
+    if not channel_id:
+        return
+    channel = bot.get_channel(channel_id)
+    if channel:
+        favicon_url = await get_favicon_url(url)
+        
+        embed = discord.Embed(
+            title="🟢 Website Online", 
+            description=f"**{url}** ist wieder erreichbar",
+            color=discord.Color.green(),
+            timestamp=discord.utils.utcnow()
+        )
+        
+        if favicon_url:
+            embed.set_thumbnail(url=favicon_url)
+        
+        embed.set_footer(text="Site Sentinel", icon_url=bot.user.avatar.url if bot.user.avatar else None)
+        
         await channel.send(embed=embed)
 
 
