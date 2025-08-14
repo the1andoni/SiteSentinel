@@ -1,6 +1,6 @@
 import discord
 from discord import app_commands
-from .logger import write_log
+from logger import write_log
 
 
 class CustomCommands(discord.ext.commands.Cog):
@@ -134,5 +134,6 @@ class CustomCommands(discord.ext.commands.Cog):
             embed.add_field(name="Hostname", value=hostname, inline=True)
         if local_ip:
             embed.add_field(name="Lokale IP", value=local_ip, inline=True)
+
 
         await interaction.response.send_message(embed=embed)
