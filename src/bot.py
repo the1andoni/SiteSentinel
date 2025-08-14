@@ -28,12 +28,15 @@ db = Database()
 class SiteMonitor:
     def __init__(self, db):
         self.db = db
-        self.sites = self.db.load_sites()  # Lade aus DB
+        loaded_sites = self.db.load_sites()  # Lade aus DB
+        # Alle geladenen Sites auf None setzen (unbekannter Status)
+        self.sites = {url: None for url in loaded_sites}
         self.stats = {}
         self.downtime_log = {}
+        write_log(f"SiteMonitor initialisiert mit {len(self.sites)} Websites", db=db)
 
     def add_site(self, url):
-        self.sites[url] = True
+        self.sites[url] = None  # None = unbekannter Status, nicht False
         self.db.save_site(url)
         self.stats.setdefault(url, {"up": 0, "down": 0, "response_times": []})
         self.downtime_log.setdefault(url, [])
@@ -77,9 +80,14 @@ async def on_ready():
 
 @tasks.loop(seconds=CHECK_INTERVAL)
 async def check_websites():
+    if not monitor.sites:
+        return  # Keine Websites zu überwachen
+        
     async with aiohttp.ClientSession() as session:
         for url in list(monitor.sites.keys()):
             previous_status = monitor.sites.get(url, None)  # Vorheriger Status
+            write_log(f"Checking {url} - Previous status: {previous_status}", db=db)
+            
             try:
                 async with session.get(url, timeout=10) as resp:
                     response_time = None
@@ -87,6 +95,8 @@ async def check_websites():
                         response_time = resp.elapsed.total_seconds()
                     except Exception:
                         response_time = None
+                    
+                    write_log(f"{url} - HTTP Status: {resp.status}, Response time: {response_time}", db=db)
                     
                     # 2xx und 3xx Status-Codes als "online" betrachten
                     if 200 <= resp.status < 400:
@@ -96,7 +106,9 @@ async def check_websites():
                             monitor.stats[url]["response_times"].append(response_time)
                         monitor.sites[url] = True
                         
-                        # Nur benachrichtigen wenn vorher offline war
+                        write_log(f"{url} - Marked as ONLINE", db=db)
+                        
+                        # Nur benachrichtigen wenn vorher offline war (nicht beim ersten Check)
                         if previous_status is False:
                             await notify_recovery(url)
                             write_log(f"Seite wieder online: {url}", db=db)
@@ -105,18 +117,23 @@ async def check_websites():
                         monitor.stats[url]["down"] += 1
                         monitor.sites[url] = False
                         
-                        # Nur benachrichtigen wenn vorher online war
-                        if previous_status is not False:
+                        write_log(f"{url} - Marked as OFFLINE due to HTTP {resp.status}", db=db)
+                        
+                        # Nur benachrichtigen wenn vorher online war (nicht beim ersten Check)
+                        if previous_status is True:
                             await notify_downtime(url, f"HTTP {resp.status}")
                             monitor.log_downtime(url, discord.utils.utcnow())
                             write_log(f"Seite offline: {url} (HTTP {resp.status})", db=db)
+                            
             except Exception as e:
                 monitor.stats.setdefault(url, {"up": 0, "down": 0, "response_times": []})
                 monitor.stats[url]["down"] += 1
                 monitor.sites[url] = False
                 
-                # Nur benachrichtigen wenn vorher online war
-                if previous_status is not False:
+                write_log(f"{url} - Marked as OFFLINE due to exception: {e}", db=db)
+                
+                # Nur benachrichtigen wenn vorher online war (nicht beim ersten Check)
+                if previous_status is True:
                     await notify_downtime(url, str(e))
                     monitor.log_downtime(url, discord.utils.utcnow())
                     write_log(f"Fehler beim Check von {url}: {e}", db=db)
