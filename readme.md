@@ -94,7 +94,7 @@ python bot.py
 - Alle Nachrichten an Discord werden als Embeds gesendet.
 
 ## Lizenz
-MIT — siehe `LICENSE`
+CyberSpaceConsulting Public License — siehe `LICENSE`
 
 ## CONTRIBUTING
 Siehe `CODE_OF_CONDUCT.md` für Verhaltensregeln.
